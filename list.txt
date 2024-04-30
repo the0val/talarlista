@@ -1,0 +1,238 @@
+import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:provider/provider.dart';
+import 'model.dart';
+import 'speaker.dart';
+
+class IdForm extends StatelessWidget {
+  IdForm({super.key});
+
+  final GlobalKey<FormState> _formKey = GlobalKey<FormState>();
+
+  final FocusNode _textFocus = FocusNode();
+  final TextEditingController _textController = TextEditingController();
+
+  @override
+  Widget build(BuildContext context) {
+    SpeakersQueue speakers = Provider.of<SpeakersQueue>(context, listen: false);
+
+    void add() {
+      if (_textController.text != '') {
+        // Get text and add to model
+        speakers.queue(Speaker(_textController.text));
+      }
+      _resetTextfield();
+    }
+
+    void remove() {
+      speakers.dequeue();
+      _resetTextfield();
+    }
+
+    return Shortcuts(
+      shortcuts: <ShortcutActivator, Intent>{
+        const SingleActivator(LogicalKeyboardKey.enter):
+            VoidCallbackIntent(() => add()),
+      },
+      child: Form(
+        key: _formKey,
+        child: Padding(
+          padding: const EdgeInsets.all(8.0),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: <Widget>[
+              SizedBox(
+                width: 200,
+                child: TextFormField(
+                    controller: _textController,
+                    autofocus: true,
+                    focusNode: _textFocus,
+                    decoration: const InputDecoration(hintText: 'OmbudsNr')),
+              ),
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 12.0),
+                child: ElevatedButton(
+                    onPressed: add, child: const Text('Lägg till')),
+              ),
+              ElevatedButton(onPressed: remove, child: const Text('Ta bort')),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  void _resetTextfield() {
+    _formKey.currentState?.reset();
+    _textFocus.requestFocus();
+  }
+}
+import 'package:file_picker/file_picker.dart';
+import 'package:csv/csv.dart';
+import 'dart:io';
+import 'dart:convert';
+import 'model.dart';
+import 'speaker.dart';
+
+class Filepicker {
+  final SpeakersQueue model;
+
+  Filepicker(this.model);
+
+  void show() {
+    Future<FilePickerResult?> res = FilePicker.platform
+        .pickFiles(type: FileType.custom, allowedExtensions: ['csv']);
+    handleResult(res);
+  }
+
+  void handleResult(Future<FilePickerResult?> res) async {
+    FilePickerResult? result = await res;
+    if (result != null) {
+      File file = File(result.files.single.path!);
+      var data = await file
+          .openRead()
+          .transform(utf8.decoder)
+          .transform(const CsvToListConverter(
+              fieldDelimiter: ';', shouldParseNumbers: false))
+          .toList();
+
+      var speakerData = [
+        for (List<dynamic> row in data)
+          switch (row.length) {
+            1 => Speaker(row[0]),
+            2 => Speaker(row[0], row[1]),
+            3 => Speaker(row[0], row[1], row[2]),
+            4 => Speaker(row[0], row[1], row[2], row[3]),
+            _ => throw FormatException('Invalid format: ${row.toString()}'),
+          }
+      ];
+      model.speakerData = speakerData;
+    }
+  }
+}
+import 'package:flutter/material.dart';
+import 'model.dart';
+import 'package:provider/provider.dart';
+
+class OrderList extends StatelessWidget {
+  OrderList({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return Consumer<SpeakersQueue>(
+      builder: (context, speakers, child) => DataTable(
+        columns: _columns,
+        rows: List<DataRow>.generate(
+            speakers.items.length,
+            (i) => DataRow(
+                  cells: <DataCell>[
+                    DataCell(Text(speakers.items[i].nr)),
+                    DataCell(Text(speakers.items[i].name)),
+                    DataCell(Text(speakers.items[i].info1)),
+                    DataCell(Text(speakers.items[i].info2)),
+                  ],
+                )),
+      ),
+    );
+  }
+
+  static const _colNames = ['Ombudsnummer', 'Namn', 'Utmanarlag', 'Kår'];
+  final List<DataColumn> _columns = [
+    for (final s in _colNames) DataColumn(label: Text(s))
+  ];
+}
+import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
+import 'controls.dart';
+import 'list.dart';
+import 'model.dart';
+import 'filepicker.dart';
+
+void main() {
+  runApp(const MyApp());
+}
+
+class MyApp extends StatelessWidget {
+  const MyApp({super.key});
+
+  // This widget is the root of your application.
+  @override
+  Widget build(BuildContext context) {
+    return ChangeNotifierProvider(
+      create: (context) => SpeakersQueue(),
+      child: MaterialApp(
+        title: 'Talarlista',
+        theme: ThemeData(
+          colorScheme: ColorScheme.fromSeed(seedColor: const Color(0xFFEC008C)),
+          useMaterial3: true,
+        ),
+        home: const MyHomePage(),
+      ),
+    );
+  }
+}
+
+class MyHomePage extends StatelessWidget {
+  const MyHomePage({super.key});
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        backgroundColor: Theme.of(context).colorScheme.inversePrimary,
+        title: const Padding(
+          padding: EdgeInsets.only(top: 12.0),
+          child: Text('Talarlista'),
+        ),
+        bottom: PreferredSize(
+          preferredSize: const Size.fromHeight(40),
+          child: IdForm(),
+        ),
+      ),
+      body: ListView(
+        children: [
+          OrderList(),
+        ],
+      ),
+      floatingActionButton: FloatingActionButton(
+        onPressed: Filepicker(Provider.of(context, listen: false)).show,
+        child: const Icon(Icons.file_open),
+      ),
+    );
+  }
+}
+import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart';
+import 'dart:collection';
+import 'speaker.dart';
+
+class SpeakersQueue extends ChangeNotifier {
+  final Queue<Speaker> _items = Queue<Speaker>();
+  List<Speaker> speakerData = <Speaker>[];
+  UnmodifiableListView get items => UnmodifiableListView<Speaker>(_items);
+
+  void queue(Speaker speaker) {
+    _items.addLast(_findNrInData(speaker.nr));
+    notifyListeners();
+  }
+
+  void dequeue() {
+    _items.removeFirst();
+    notifyListeners();
+  }
+
+  void remove(Speaker speaker) {
+    _items.remove(speaker);
+    notifyListeners();
+  }
+
+  Speaker _findNrInData(String nr) {
+    return speakerData.firstWhere((s) => s.nr == nr, orElse: () => Speaker(nr));
+  }
+}
+class Speaker {
+  const Speaker(this.nr, [this.name = '', this.info1 = '', this.info2 = '']);
+  final String nr;
+  final String name;
+  final String info1;
+  final String info2;
+}
